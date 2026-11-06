@@ -1,3 +1,37 @@
+# Mejora del entrenamiento: sin tope de épocas y búsqueda de hiperparámetros con Optuna
+
+Este repositorio es la continuación de [clasificacion_residuos_ia](https://github.com/gnavidad1978/clasificacion_residuos_ia), cuya versión entregada en la materia es la [v1.0-entrega](https://github.com/gnavidad1978/clasificacion_residuos_ia/releases/tag/v1.0-entrega). Aplica las recomendaciones de la Dra. Lina María Aguilar Lobo (4 de noviembre de 2026) a los tres modelos prioritarios, MobileNetV3-Large, ResNet-50 y YOLO11n-cls, y compara tres formas de entrenarlos:
+
+| Experimento | Configuración | Qué cambia |
+|---|---|---|
+| original | `configs/*.yaml` (resultados de la versión entregada) | 15 épocas como máximo, misma receta para todos |
+| sin_tope | `configs/sin_tope/` | Hasta 60 épocas; paro temprano por pérdida de validación (paciencia 6); tasa de aprendizaje que baja por meseta |
+| ajustado | `configs/ajustado/` (los genera `tune.py`) | Sin tope y con los hiperparámetros que encontró Optuna |
+
+Archivos nuevos o modificados respecto al repositorio original:
+
+| Archivo | Cambio |
+|---|---|
+| `model.py` | Optimizadores Adam y RAdam además de AdamW y SGD; programador "meseta" (ReduceLROnPlateau) además del coseno |
+| `utils.py` | El nombre del resultado incluye el experimento; guarda la brecha entre pérdida de validación y de entrenamiento en la mejor época |
+| `configs/sin_tope/` | Configuraciones sin tope de épocas |
+| `tune.py` | Búsqueda con Optuna (optimizador, tasa de aprendizaje y decaimiento de pesos; objetivo F1 macro de validación), reanudable, con poda por mediana |
+| `report_tuning.py` | Tabla de los tres experimentos, curvas comparadas y resumen de Optuna |
+| `notebooks/Proyecto_tuning.ipynb` | Cuaderno de Colab de estos experimentos: https://colab.research.google.com/github/gnavidad1978/clasificacion_residuos_ia_tuning/blob/main/notebooks/Proyecto_tuning.ipynb |
+
+Uso desde la línea de comandos:
+
+```
+python main.py fit --config configs/sin_tope/mobilenet_v3.yaml --seed_everything 42
+python tune.py --config configs/sin_tope/mobilenet_v3.yaml --pruebas 15 --epocas 10
+python main.py fit --config configs/ajustado/mobilenet_v3.yaml --seed_everything 42
+python report_tuning.py --original <carpeta con los resultados de la versión entregada>
+```
+
+El resto de este documento corresponde al repositorio original.
+
+---
+
 # Clasificación de residuos por material: redes convolucionales contra Vision Transformer
 
 Proyecto final de la materia Inteligencia Artificial (DCI019), Doctorado en Ciencias e Ingeniería, Universidad Autónoma de Guadalajara. Autora: Gabriela Medina Navidad.

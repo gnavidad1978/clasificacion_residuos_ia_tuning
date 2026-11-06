@@ -6,3 +6,4 @@ jsonargparse[signatures]==4.53.0
 tensorboard==2.21.0
 ultralytics==8.4.198
 timm==1.0.31
+optuna==4.9.0

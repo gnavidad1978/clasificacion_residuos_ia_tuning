@@ -86,10 +86,15 @@ class ResiduosModule(L.LightningModule):
         backbone:     Red a usar (ver la lista al inicio del archivo).
         num_classes:  Numero de categorias.
         pretrained:   Cargar pesos de ImageNet.
-        optimizer:    "adamw" o "sgd".
+        optimizer:    "adamw", "adam", "radam" o "sgd".
         lr:           Tasa de aprendizaje.
         weight_decay: Decaimiento de pesos (regularizacion).
         momentum:     Momentum, solo para SGD.
+        programador:  Como baja la tasa de aprendizaje.
+                      "coseno": baja suavemente hasta max_epochs (receta original, 15 epocas).
+                      "meseta": la reduce a la mitad cuando la perdida de validacion deja de
+                      bajar; no depende de max_epochs, por eso se usa cuando no hay tope de epocas.
+        paciencia_lr: Epocas sin mejora antes de reducir la tasa (solo "meseta").
     """
 
     def __init__(
@@ -101,6 +106,8 @@ class ResiduosModule(L.LightningModule):
         lr: float = 3e-4,
         weight_decay: float = 0.05,
         momentum: float = 0.9,
+        programador: str = "coseno",
+        paciencia_lr: int = 2,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -146,14 +153,25 @@ class ResiduosModule(L.LightningModule):
         self.log("test/acc", self.test_acc, on_step=False, on_epoch=True)
 
     def configure_optimizers(self):
-        if self.hparams.optimizer == "adamw":
-            opt = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr,
-                                    weight_decay=self.hparams.weight_decay)
-        elif self.hparams.optimizer == "sgd":
-            opt = torch.optim.SGD(self.parameters(), lr=self.hparams.lr,
-                                  momentum=self.hparams.momentum,
-                                  weight_decay=self.hparams.weight_decay)
+        h = self.hparams
+        if h.optimizer == "adamw":
+            opt = torch.optim.AdamW(self.parameters(), lr=h.lr, weight_decay=h.weight_decay)
+        elif h.optimizer == "adam":
+            opt = torch.optim.Adam(self.parameters(), lr=h.lr, weight_decay=h.weight_decay)
+        elif h.optimizer == "radam":
+            opt = torch.optim.RAdam(self.parameters(), lr=h.lr, weight_decay=h.weight_decay)
+        elif h.optimizer == "sgd":
+            opt = torch.optim.SGD(self.parameters(), lr=h.lr, momentum=h.momentum,
+                                  weight_decay=h.weight_decay)
         else:
-            raise ValueError("optimizer debe ser 'adamw' o 'sgd'")
-        programador = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=self.trainer.max_epochs)
-        return {"optimizer": opt, "lr_scheduler": {"scheduler": programador, "interval": "epoch"}}
+            raise ValueError("optimizer debe ser 'adamw', 'adam', 'radam' o 'sgd'")
+
+        if h.programador == "coseno":
+            programador = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=self.trainer.max_epochs)
+            return {"optimizer": opt, "lr_scheduler": {"scheduler": programador, "interval": "epoch"}}
+        if h.programador == "meseta":
+            programador = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                opt, mode="min", factor=0.5, patience=h.paciencia_lr)
+            return {"optimizer": opt, "lr_scheduler": {"scheduler": programador, "interval": "epoch",
+                                                       "monitor": "val/loss"}}
+        raise ValueError("programador debe ser 'coseno' o 'meseta'")

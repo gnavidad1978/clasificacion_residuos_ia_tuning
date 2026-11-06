@@ -109,10 +109,13 @@ def predecir(modelo, cargador, dispositivo):
 class RegistroResultados(L.Callback):
     """Registra historia, desempeno en validacion y costo de cada corrida."""
 
-    def __init__(self, dir_resultados: str = "resultados", hilos_cpu: int = 4):
+    def __init__(self, dir_resultados: str = "resultados", hilos_cpu: int = 4, experimento: str = ""):
+        """experimento: etiqueta que se agrega al nombre del archivo (por ejemplo "sin_tope" o
+        "ajustado"), para que corridas de distintos experimentos no se sobrescriban."""
         super().__init__()
         self.dir_resultados = dir_resultados
         self.hilos_cpu = hilos_cpu
+        self.experimento = experimento
 
     def on_fit_start(self, trainer, pl_module):
         self.inicio = time.time()
@@ -148,19 +151,27 @@ class RegistroResultados(L.Callback):
         reales, predichas = predecir(mejor, trainer.datamodule.val_dataloader(), pl_module.device)
         backbone = pl_module.hparams.backbone
         semilla = int(os.environ.get("PL_GLOBAL_SEED", -1))
-        nombre = f"{backbone}_semilla{semilla}"
+        nombre = f"{backbone}_{self.experimento}_semilla{semilla}" if self.experimento else f"{backbone}_semilla{semilla}"
 
         os.makedirs(os.path.join(self.dir_resultados, "pesos"), exist_ok=True)
         ruta_pesos = os.path.join(self.dir_resultados, "pesos", f"{nombre}.pt")
         torch.save(mejor.net.state_dict(), ruta_pesos)
 
         f1s = [h["f1_val"] if h["f1_val"] is not None else -1 for h in self.historia]
+        mejor_epoca = int(np.argmax(f1s)) + 1 if f1s else None
+        # Brecha: cuanto mas alta es la perdida de validacion que la de entrenamiento en la
+        # epoca elegida. Cuanto mas chica, mas "pegadas" las curvas (menos memorizacion).
+        h_mejor = self.historia[mejor_epoca - 1] if mejor_epoca else {}
+        brecha = (h_mejor["perdida_val"] - h_mejor["perdida_ent"]
+                  if h_mejor.get("perdida_val") is not None and h_mejor.get("perdida_ent") is not None else None)
         resultado = {
             "modelo": backbone,
+            "experimento": self.experimento or "original",
             "semilla": semilla,
             "version_tensorboard": getattr(trainer.logger, "version", None),
             "checkpoint": ruta_ckpt,
-            "mejor_epoca": int(np.argmax(f1s)) + 1 if f1s else None,
+            "mejor_epoca": mejor_epoca,
+            "brecha_perdida_mejor_epoca": brecha,
             "f1_macro_val": f1_score(reales, predichas, average="macro", zero_division=0),
             "exactitud_val": accuracy_score(reales, predichas),
             "parametros_millones": contar_parametros(mejor.net) / 1e6,
@@ -179,7 +190,8 @@ class RegistroResultados(L.Callback):
         os.makedirs(self.dir_resultados, exist_ok=True)
         with open(os.path.join(self.dir_resultados, f"{nombre}.json"), "w") as f:
             json.dump(resultado, f, indent=1)
+        texto_brecha = f", brecha {brecha:.3f}" if brecha is not None else ""
         print(f"\n{nombre}: F1 macro validacion {resultado['f1_macro_val']:.3f} "
-              f"(mejor epoca {resultado['mejor_epoca']}), {minutos:.1f} min, "
+              f"(mejor epoca {resultado['mejor_epoca']}{texto_brecha}), {minutos:.1f} min, "
               f"{resultado['parametros_millones']:.1f} M parametros, "
               f"{resultado['ms_por_foto_cpu']:.0f} ms por foto en CPU")
