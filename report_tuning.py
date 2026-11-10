@@ -112,7 +112,11 @@ def main():
     tablas_optuna = [pd.read_csv(f) for f in sorted(glob.glob(os.path.join(a.resultados, "optuna_*.csv")))]
     if tablas_optuna:
         optuna_todo = pd.concat(tablas_optuna)
-        mejores = optuna_todo.sort_values("f1_val", ascending=False).groupby("modelo").head(1).set_index("modelo")
+        # La mejor combinacion es la misma que eligio tune.py: la de mayor F1 entre las pruebas
+        # completas. Las podadas pueden haber alcanzado un F1 parecido antes de cortarse, pero
+        # no terminaron su entrenamiento.
+        completas_todo = optuna_todo[optuna_todo["estado"] == "completa"]
+        mejores = completas_todo.sort_values("f1_val", ascending=False).groupby("modelo").head(1).set_index("modelo")
         resumen = optuna_todo.groupby("modelo").agg(pruebas=("prueba", "count"),
                                                     podadas=("estado", lambda s: int((s == "podada").sum())))
         cols = [c for c in ["prueba", "f1_val", "optimizer", "lr", "weight_decay", "programador"] if c in mejores]

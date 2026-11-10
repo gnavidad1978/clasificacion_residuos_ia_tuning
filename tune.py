@@ -17,7 +17,14 @@ Objetivo: el mayor F1 macro en VALIDACION. El grupo de prueba nunca se usa aqui.
 
 Cada prueba entrena como maximo --epocas epocas (15, el horizonte de la receta original) y
 Optuna corta antes las combinaciones que van claramente peor que la mediana de las anteriores
-(poda). Las primeras 5 pruebas son al azar para explorar; las demas las propone el metodo TPE
+(poda), excepto en la ultima epoca, donde cortar ya no ahorra tiempo. Las pruebas con coseno
+no tienen paro temprano: el coseno da sus mejores epocas al final, cuando la tasa ya es casi
+cero, y un paro temprano las cortaba a la mitad (asi paso en la busqueda v2: las combinaciones
+cercanas a la receta original pararon en 6 a 9 epocas). Las pruebas con meseta conservan el paro
+temprano de configs/sin_tope (paciencia de 6 epocas sobre la perdida de validacion).
+
+La primera prueba es siempre la receta original (AdamW, tasa 0.0003, decaimiento 0.05, coseno),
+para que la busqueda parta de ella y solo pueda igualarla o mejorarla. Las primeras 5 pruebas son al azar para explorar; las demas las propone el metodo TPE
 a partir de las anteriores. Todas las pruebas usan la misma semilla, asi que las diferencias
 se deben a los hiperparametros.
 
@@ -27,7 +34,9 @@ limite de seguridad de la configuracion sin tope.
 
 Cada busqueda vive en su propia base de datos (--almacen). La primera (9 nov 2026, sin
 programador y con 10 epocas por prueba) quedo en optuna_<modelo>.db; la actual usa
-optuna_<modelo>_v2.db, para no mezclar pruebas hechas con reglas distintas.
+optuna_<modelo>_v2.db y la tercera (la actual, con la receta original como primera prueba y
+sin paro temprano en las pruebas con coseno) optuna_<modelo>_v3.db, para no mezclar pruebas
+hechas con reglas distintas.
 
 Si Colab se desconecta, la busqueda se reanuda donde se quedo: el avance se guarda en una
 base de datos (--almacen) que se respalda despues de cada prueba (--respaldo).
@@ -37,7 +46,8 @@ Al terminar escribe:
     resultados/optuna_<modelo>.csv      todas las pruebas, para el reporte
 
 Uso:
-    python tune.py --config configs/sin_tope/mobilenet_v3.yaml --pruebas 15 --epocas 15
+    python tune.py --config configs/sin_tope/mobilenet_v3.yaml --pruebas 15 --epocas 15 \
+        --almacen optuna_mobilenet_v3_large_v3.db
 """
 
 import argparse
@@ -76,7 +86,9 @@ class PodaOptuna(Callback):
                               "perdida_val": float(m["val/loss"]),
                               "perdida_ent": float(m["train/loss"]) if "train/loss" in m else None})
         self.prueba.report(f1, step=trainer.current_epoch)
-        if self.prueba.should_prune():
+        # En la ultima epoca ya no se ahorra nada: la prueba se deja terminar
+        ultima = trainer.current_epoch + 1 >= trainer.max_epochs
+        if not ultima and self.prueba.should_prune():
             raise optuna.TrialPruned(f"podada en la epoca {trainer.current_epoch + 1}")
 
 
@@ -134,6 +146,10 @@ def main():
         sampler=optuna.samplers.TPESampler(seed=a.semilla + len(previas), n_startup_trials=5),
         pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=3),
     )
+    if not estudio.trials:
+        # Primera prueba: la receta original (la de la version entregada)
+        estudio.enqueue_trial({"optimizer": cfg["model"]["optimizer"], "lr_adam": float(cfg["model"]["lr"]),
+                               "weight_decay": float(cfg["model"]["weight_decay"]), "programador": "coseno"})
     terminadas = [t for t in estudio.trials
                   if t.state in (optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED)]
     faltan = max(0, a.pruebas - len(terminadas))
@@ -148,6 +164,9 @@ def main():
         L.seed_everything(a.semilla, workers=True, verbose=False)
         red = ResiduosModule(**{**cfg["model"], **params})
         poda = PodaOptuna(prueba)
+        callbacks = [poda]
+        if params["programador"] == "meseta":
+            callbacks.append(EarlyStopping(monitor="val/loss", mode="min", patience=6, min_delta=0.001))
         trainer = L.Trainer(
             max_epochs=a.epocas,
             accelerator=trainer_cfg.get("accelerator", "auto"),
@@ -155,7 +174,7 @@ def main():
             precision=trainer_cfg.get("precision", "16-mixed") if torch.cuda.is_available() else "32-true",
             logger=TensorBoardLogger("runs_optuna", name=nombre_busqueda, version=f"prueba_{prueba.number:02d}",
                                      default_hp_metric=False),
-            callbacks=[poda, EarlyStopping(monitor="val/loss", mode="min", patience=3, min_delta=0.001)],
+            callbacks=callbacks,
             enable_checkpointing=False, enable_progress_bar=False, enable_model_summary=False,
         )
         try:
@@ -205,8 +224,10 @@ def main():
     nuevo["model"].update(mejor)
     if mejor["programador"] == "coseno":
         # El coseno baja la tasa hasta casi cero en max_epochs epocas: se conserva el mismo
-        # horizonte con el que gano en la busqueda
+        # horizonte con el que gano en la busqueda y, como en la busqueda, sin paro temprano
         nuevo["trainer"]["max_epochs"] = a.epocas
+        nuevo["trainer"]["callbacks"] = [cb for cb in nuevo["trainer"]["callbacks"]
+                                         if not cb["class_path"].endswith("EarlyStopping")]
     nuevo["trainer"]["logger"]["init_args"]["name"] = f"{modelo}_ajustado"
     for cb in nuevo["trainer"]["callbacks"]:
         if cb["class_path"].endswith("RegistroResultados"):
