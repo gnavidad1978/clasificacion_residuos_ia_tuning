@@ -9,21 +9,31 @@ Que se busca:
     tasa de aprendizaje de 0.00001 a 0.01 para los Adam (rango sugerido por la Dra. Lina);
                         de 0.001 a 0.1 para SGD, que necesita tasas mas altas para avanzar
     decaimiento de pesos de 0.000001 a 0.1
+    programador         coseno (baja la tasa hasta casi cero en --epocas epocas, como la receta
+                        original) o meseta (la reduce a la mitad cuando la perdida de validacion
+                        deja de bajar). Se agrego porque en el experimento sin tope la meseta dejo
+                        la tasa alta casi todo el entrenamiento y MobileNetV3 empeoro.
 Objetivo: el mayor F1 macro en VALIDACION. El grupo de prueba nunca se usa aqui.
 
-Para ahorrar tiempo, cada prueba entrena como maximo --epocas epocas y Optuna corta antes
-las combinaciones que van claramente peor que la mediana de las anteriores (poda). Todas
-las pruebas usan la misma semilla, asi que las diferencias se deben a los hiperparametros.
+Cada prueba entrena como maximo --epocas epocas (15, el horizonte de la receta original) y
+Optuna corta antes las combinaciones que van claramente peor que la mediana de las anteriores
+(poda). Las primeras 5 pruebas son al azar para explorar; las demas las propone el metodo TPE
+a partir de las anteriores. Todas las pruebas usan la misma semilla, asi que las diferencias
+se deben a los hiperparametros.
+
+Si gana el coseno, la configuracion ajustada conserva su horizonte: maximo --epocas epocas,
+porque el coseno necesita saber de antemano cuantas habra. Si gana la meseta, conserva el
+limite de seguridad de la configuracion sin tope.
 
 Si Colab se desconecta, la busqueda se reanuda donde se quedo: el avance se guarda en una
 base de datos (--almacen) que se respalda despues de cada prueba (--respaldo).
 
 Al terminar escribe:
-    configs/ajustado/<config>.yaml      la configuracion sin tope con los mejores valores
+    configs/ajustado/<config>.yaml      la configuracion con los mejores valores
     resultados/optuna_<modelo>.csv      todas las pruebas, para el reporte
 
 Uso:
-    python tune.py --config configs/sin_tope/mobilenet_v3.yaml --pruebas 15 --epocas 10
+    python tune.py --config configs/sin_tope/mobilenet_v3.yaml --pruebas 15 --epocas 15
 """
 
 import argparse
@@ -73,20 +83,22 @@ def sugerir(prueba: optuna.Trial) -> dict:
     else:
         lr = prueba.suggest_float("lr_adam", 1e-5, 1e-2, log=True)
     weight_decay = prueba.suggest_float("weight_decay", 1e-6, 1e-1, log=True)
-    return {"optimizer": optimizador, "lr": lr, "weight_decay": weight_decay}
+    programador = prueba.suggest_categorical("programador", ["coseno", "meseta"])
+    return {"optimizer": optimizador, "lr": lr, "weight_decay": weight_decay, "programador": programador}
 
 
 def valores(params: dict) -> dict:
     """Convierte los parametros guardados por Optuna a los del modelo."""
     lr = params["lr_sgd"] if params["optimizer"] == "sgd" else params["lr_adam"]
-    return {"optimizer": params["optimizer"], "lr": float(lr), "weight_decay": float(params["weight_decay"])}
+    return {"optimizer": params["optimizer"], "lr": float(lr), "weight_decay": float(params["weight_decay"]),
+            "programador": params["programador"]}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True, help="YAML de configs/sin_tope/")
     ap.add_argument("--pruebas", type=int, default=15, help="numero total de combinaciones a probar")
-    ap.add_argument("--epocas", type=int, default=10, help="epocas maximas por prueba")
+    ap.add_argument("--epocas", type=int, default=15, help="epocas maximas por prueba (y horizonte del coseno)")
     ap.add_argument("--semilla", type=int, default=42)
     ap.add_argument("--almacen", default=None, help="base de datos local de Optuna")
     ap.add_argument("--respaldo", default=None, help="copia de la base de datos en Drive")
@@ -113,7 +125,7 @@ def main():
         study_name=modelo, storage=f"sqlite:///{almacen}", load_if_exists=True, direction="maximize",
         # La semilla del muestreador cambia con las pruebas ya hechas: al reanudar no repite
         # las mismas combinaciones del principio
-        sampler=optuna.samplers.TPESampler(seed=a.semilla + len(previas)),
+        sampler=optuna.samplers.TPESampler(seed=a.semilla + len(previas), n_startup_trials=5),
         pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=3),
     )
     terminadas = [t for t in estudio.trials
@@ -185,6 +197,10 @@ def main():
     # Configuracion ajustada: la de sin tope con los mejores valores
     nuevo = copy.deepcopy(cfg)
     nuevo["model"].update(mejor)
+    if mejor["programador"] == "coseno":
+        # El coseno baja la tasa hasta casi cero en max_epochs epocas: se conserva el mismo
+        # horizonte con el que gano en la busqueda
+        nuevo["trainer"]["max_epochs"] = a.epocas
     nuevo["trainer"]["logger"]["init_args"]["name"] = f"{modelo}_ajustado"
     for cb in nuevo["trainer"]["callbacks"]:
         if cb["class_path"].endswith("RegistroResultados"):

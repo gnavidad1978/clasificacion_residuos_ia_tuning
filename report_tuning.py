@@ -115,7 +115,8 @@ def main():
         mejores = optuna_todo.sort_values("f1_val", ascending=False).groupby("modelo").head(1).set_index("modelo")
         resumen = optuna_todo.groupby("modelo").agg(pruebas=("prueba", "count"),
                                                     podadas=("estado", lambda s: int((s == "podada").sum())))
-        resumen = resumen.join(mejores[["prueba", "f1_val", "optimizer", "lr", "weight_decay"]]
+        cols = [c for c in ["prueba", "f1_val", "optimizer", "lr", "weight_decay", "programador"] if c in mejores]
+        resumen = resumen.join(mejores[cols]
                                .rename(columns={"prueba": "mejor_prueba", "f1_val": "mejor_f1_val"}))
         print("\nBusqueda con Optuna (F1 de validacion con epocas limitadas por prueba):\n")
         print(resumen.to_string())
