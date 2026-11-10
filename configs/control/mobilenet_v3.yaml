@@ -1,0 +1,92 @@
+# ============================================================
+# configs/control/mobilenet_v3.yaml: CONTROL, la receta original repetida hoy
+#
+# Identica a configs/mobilenet_v3.yaml (la de la version entregada: 15 epocas, AdamW, tasa 0.0003,
+# decaimiento 0.05, coseno). Solo cambian el nombre de la carpeta de TensorBoard y la etiqueta
+# "control" del archivo de resultados. Sirve para comprobar que, en el Colab de hoy, la receta
+# original sigue dando el mismo F1 que en la version entregada; asi, la diferencia entre
+# "original" y "ajustado" se debe a los hiperparametros y no a cambios del entorno.
+# ============================================================
+
+# ============================================================
+# configs/mobilenet_v3.yaml: entrenamiento de MobileNetV3-Large (CNN ligera)
+#
+# Uso (desde la carpeta del repositorio):
+#   python main.py fit --config configs/mobilenet_v3.yaml
+#   python main.py fit --config configs/mobilenet_v3.yaml --seed_everything 7
+# ============================================================
+
+seed_everything: 42        # semilla fija (regla 1 del protocolo)
+
+# ----------------------------------------------------------
+# Trainer
+# ----------------------------------------------------------
+trainer:
+  max_epochs: 15
+  accelerator: auto        # "cpu" | "gpu" | "auto"
+  devices: auto
+  precision: "16-mixed"    # "32-true" si no hay GPU
+  enable_progress_bar: false   # el avance por epoca lo imprime RegistroResultados
+
+  logger:
+    class_path: lightning.pytorch.loggers.TensorBoardLogger
+    init_args:
+      save_dir: runs
+      name: mobilenet_v3_large_control   # logs en runs/mobilenet_v3_large_control/version_N/
+      version: null
+
+  callbacks:
+    # Guarda el modelo con mejor F1 macro en validacion (metrica elegida antes de ver resultados)
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: val/f1
+        mode: max
+        save_top_k: 1
+        filename: "mejor-{epoch:02d}"
+
+    # Se detiene si el F1 de validacion no mejora en 4 epocas
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: val/f1
+        mode: max
+        patience: 4
+        verbose: true
+
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+
+    # Guarda resultados/mobilenet_v3_large_semilla<N>.json con desempeno y costo
+    - class_path: utils.RegistroResultados
+      init_args:
+        dir_resultados: resultados
+        hilos_cpu: 4         # la Raspberry Pi 5 tiene 4 nucleos
+        experimento: control
+
+# ----------------------------------------------------------
+# Modelo
+# ----------------------------------------------------------
+model:
+  backbone: mobilenet_v3_large
+  num_classes: 6
+  pretrained: true
+  optimizer: adamw         # "adamw" | "sgd"
+  lr: 0.0003
+  weight_decay: 0.05
+  momentum: 0.9            # solo aplica si optimizer=sgd
+
+# ----------------------------------------------------------
+# Datos
+# ----------------------------------------------------------
+data:
+  particion_csv: data/particion_semilla42.csv
+  raiz_imagenes: data/realwaste
+  batch_size: 32
+  img_size: 224
+  mean: [0.485, 0.456, 0.406]   # valores publicados de ImageNet
+  std:  [0.229, 0.224, 0.225]
+  num_workers: 2
+  giro_grados: 15
+  brillo: 0.3
+  contraste: 0.3
+  saturacion: 0.2

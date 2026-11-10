@@ -2,6 +2,7 @@
 
 Compara, para cada modelo, tres formas de entrenarlo:
     original   15 epocas como maximo y la misma receta para todos (version entregada, v1.0-entrega)
+    control    la receta original repetida en el Colab actual (configs/control), semilla 42
     sin_tope   misma receta, pero cada modelo para solo cuando su perdida de validacion deja de bajar
     ajustado   sin tope y con los hiperparametros que encontro Optuna (tune.py)
 
@@ -29,8 +30,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 MODELOS = ["mobilenet_v3_large", "resnet50", "yolo11n_cls"]
-EXPERIMENTOS = ["original", "sin_tope", "ajustado"]
-COLORES = {"original": "tab:gray", "sin_tope": "tab:blue", "ajustado": "tab:orange"}
+EXPERIMENTOS = ["original", "control", "sin_tope", "ajustado"]
+COLORES = {"original": "tab:gray", "control": "tab:green", "sin_tope": "tab:blue", "ajustado": "tab:orange"}
 
 
 def media_desv(s, dec=3):
