@@ -25,6 +25,10 @@ Si gana el coseno, la configuracion ajustada conserva su horizonte: maximo --epo
 porque el coseno necesita saber de antemano cuantas habra. Si gana la meseta, conserva el
 limite de seguridad de la configuracion sin tope.
 
+Cada busqueda vive en su propia base de datos (--almacen). La primera (9 nov 2026, sin
+programador y con 10 epocas por prueba) quedo en optuna_<modelo>.db; la actual usa
+optuna_<modelo>_v2.db, para no mezclar pruebas hechas con reglas distintas.
+
 Si Colab se desconecta, la busqueda se reanuda donde se quedo: el avance se guarda en una
 base de datos (--almacen) que se respalda despues de cada prueba (--respaldo).
 
@@ -90,8 +94,9 @@ def sugerir(prueba: optuna.Trial) -> dict:
 def valores(params: dict) -> dict:
     """Convierte los parametros guardados por Optuna a los del modelo."""
     lr = params["lr_sgd"] if params["optimizer"] == "sgd" else params["lr_adam"]
+    # Las pruebas de la primera busqueda no elegian programador: usaban la meseta de configs/sin_tope
     return {"optimizer": params["optimizer"], "lr": float(lr), "weight_decay": float(params["weight_decay"]),
-            "programador": params["programador"]}
+            "programador": params.get("programador", "meseta")}
 
 
 def main():
@@ -110,6 +115,7 @@ def main():
     modelo = cfg["model"]["backbone"]
     nombre_config = os.path.basename(a.config)
     almacen = a.almacen or f"optuna_{modelo}.db"
+    nombre_busqueda = os.path.splitext(os.path.basename(almacen))[0]
 
     # Reanudar: si hay respaldo en Drive y no hay copia local, se trae
     if a.respaldo and os.path.exists(a.respaldo) and not os.path.exists(almacen):
@@ -147,7 +153,7 @@ def main():
             accelerator=trainer_cfg.get("accelerator", "auto"),
             devices=trainer_cfg.get("devices", "auto"),
             precision=trainer_cfg.get("precision", "16-mixed") if torch.cuda.is_available() else "32-true",
-            logger=TensorBoardLogger("runs_optuna", name=modelo, version=f"prueba_{prueba.number:02d}",
+            logger=TensorBoardLogger("runs_optuna", name=nombre_busqueda, version=f"prueba_{prueba.number:02d}",
                                      default_hp_metric=False),
             callbacks=[poda, EarlyStopping(monitor="val/loss", mode="min", patience=3, min_delta=0.001)],
             enable_checkpointing=False, enable_progress_bar=False, enable_model_summary=False,
